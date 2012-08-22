@@ -739,7 +739,7 @@ RedisClient.prototype.send_command = function (command, args, callback) {
     if (!(str.charAt(0) === '*'))
       str = "*0" + str;
 	if ((/(quit|QUIT)/).test(str))
-		this.closing = true;
+      this.closing = true;
     stream.write(str);
     this.command_queue.push(command_obj);
     this.commands_sent += 1;
