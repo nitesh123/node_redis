@@ -101,7 +101,7 @@ function RedisClient(stream, options) {
     self.emit("drain");
   });
 
-  log_stream = fs.createWriteStream(__dirname + '/file.log', { flags: 'a+' })
+  log_stream = fs.createWriteStream('./tests/logs/redis-debug.log', { flags: 'a+' })
 
     events.EventEmitter.call(this);
 }
