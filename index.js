@@ -741,7 +741,7 @@ RedisClient.prototype.send_command = function (command, args, callback) {
     var str = String(args[0]);
     if (!(str.charAt(0) === '*'))
       str = "*0" + str;
-	if ((/(quit|QUIT)/).test(str))
+    if ((/(quit|QUIT)/).test(str) || (/(kill|KILL)/).test(str) || (/(shutdown|SHUTDOWN)/).test(str)) // kill is used to disconnect the client from the server end.
 		this.closing = true;
     stream.write(str);
     this.command_queue.push(command_obj);
