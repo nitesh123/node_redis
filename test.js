@@ -1,9 +1,14 @@
 /*global require console setTimeout process Buffer */
+var PORT = 6379;
+var HOST = '127.0.0.1';
+
 var redis = require("./index"),
-    client = redis.createClient(),
-    client2 = redis.createClient(),
-    client3 = redis.createClient(),
+    client = redis.createClient(PORT, HOST),
+    client2 = redis.createClient(PORT, HOST),
+    client3 = redis.createClient(PORT, HOST),
+    bclient = redis.createClient(PORT, HOST, { return_buffers: true }),
     assert = require("assert"),
+    crypto = require("crypto"),
     util = require("./lib/util"),
     test_db_num = 15, // this DB will be flushed and used for testing
     tests = {},
@@ -22,7 +27,7 @@ function buffers_to_strings(arr) {
 
 function require_number(expected, label) {
     return function (err, results) {
-        assert.strictEqual(null, err, "result sent back unexpected error: " + err);
+        assert.strictEqual(null, err, label + " expected " + expected + ", got error: " + err);
         assert.strictEqual(expected, results, label + " " + expected + " !== " + results);
         assert.strictEqual(typeof results, "number", label);
         return true;
@@ -31,7 +36,7 @@ function require_number(expected, label) {
 
 function require_number_any(label) {
     return function (err, results) {
-        assert.strictEqual(null, err, "result sent back unexpected error: " + err);
+        assert.strictEqual(null, err, label + " expected any number, got error: " + err);
         assert.strictEqual(typeof results, "number", label + " " + results + " is not a number");
         return true;
     };
@@ -39,7 +44,7 @@ function require_number_any(label) {
 
 function require_number_pos(label) {
     return function (err, results) {
-        assert.strictEqual(null, err, "result sent back unexpected error: " + err);
+        assert.strictEqual(null, err, label + " expected positive number, got error: " + err);
         assert.strictEqual(true, (results > 0), label + " " + results + " is not a positive number");
         return true;
     };
@@ -47,7 +52,7 @@ function require_number_pos(label) {
 
 function require_string(str, label) {
     return function (err, results) {
-        assert.strictEqual(null, err, "result sent back unexpected error: " + err);
+        assert.strictEqual(null, err, label + " expected string '" + str + "', got error: " + err);
         assert.equal(str, results, label + " " + str + " does not match " + results);
         return true;
     };
@@ -55,7 +60,7 @@ function require_string(str, label) {
 
 function require_null(label) {
     return function (err, results) {
-        assert.strictEqual(null, err, "result sent back unexpected error: " + err);
+        assert.strictEqual(null, err, label + " expected null, got error: " + err);
         assert.strictEqual(null, results, label + ": " + results + " is not null");
         return true;
     };
@@ -84,7 +89,7 @@ next = function next(name) {
     run_next_test();
 };
 
-// Tests are run in the order they are defined.  So FLUSHDB should be stay first.
+// Tests are run in the order they are defined, so FLUSHDB should always be first.
 
 tests.FLUSHDB = function () {
     var name = "FLUSHDB";
@@ -94,6 +99,20 @@ tests.FLUSHDB = function () {
     client.mset("flush keys 1", "flush val 1", "flush keys 2", "flush val 2", require_string("OK", name));
     client.FLUSHDB(require_string("OK", name));
     client.dbsize(last(name, require_number(0, name)));
+};
+
+tests.INCR = function () {
+    var name = "INCR";
+
+    // Test incr with the maximum JavaScript number value. Since we are
+    // returning buffers we should get back one more as a Buffer.
+    bclient.set("seq", "9007199254740992", function (err, result) {
+        assert.strictEqual(result.toString(), "OK");
+        bclient.incr("seq", function (err, result) {
+            assert.strictEqual("9007199254740993", result.toString());
+            next(name);
+        });
+    });
 };
 
 tests.MULTI_1 = function () {
@@ -229,7 +248,7 @@ tests.MULTI_6 = function () {
 tests.EVAL_1 = function () {
     var name = "EVAL_1";
 
-    if (client.server_info.versions[0] >= 2 && client.server_info.versions[1] >= 9) {
+    if (client.server_info.versions[0] >= 2 && client.server_info.versions[1] >= 5) {
         // test {EVAL - Lua integer -> Redis protocol type conversion}
         client.eval("return 100.5", 0, require_number(100, name));
         // test {EVAL - Lua string -> Redis protocol type conversion}
@@ -261,62 +280,89 @@ tests.EVAL_1 = function () {
             assert.strictEqual("c", res[2], name);
             assert.strictEqual("d", res[3], name);
         });
-        // test {EVAL - is Lua able to call Redis API?}
-        client.set("mykey", "myval");
-        client.eval("return redis.call('get','mykey')", 0, require_string("myval", name));
-        // test {EVALSHA - Can we call a SHA1 if already defined?}
-        client.evalsha("9bd632c7d33e571e9f24556ebed26c3479a87129", 0, require_string("myval", name));
-        // test {EVALSHA - Do we get an error on non defined SHA1?}
-        client.evalsha("ffffffffffffffffffffffffffffffffffffffff", 0, require_error(name));
+
+        // prepare sha sum for evalsha cache test
+        var source = "return redis.call('get', 'sha test')",
+            sha = crypto.createHash('sha1').update(source).digest('hex');
+
+        client.set("sha test", "eval get sha test", function (err, res) {
+            if (err) throw err;
+            // test {EVAL - is Lua able to call Redis API?}
+            client.eval(source, 0, function (err, res) {
+                require_string("eval get sha test", name)(err, res);
+                // test {EVALSHA - Can we call a SHA1 if already defined?}
+                client.evalsha(sha, 0, require_string("eval get sha test", name));
+                // test {EVALSHA - Do we get an error on non defined SHA1?}
+                client.evalsha("ffffffffffffffffffffffffffffffffffffffff", 0, require_error(name));
+            });
+        });
+
         // test {EVAL - Redis integer -> Lua type conversion}
-        client.set("x", 0);
-        client.eval("local foo = redis.call('incr','x')\n" + "return {type(foo),foo}", 0, function (err, res) {
-            assert.strictEqual(2, res.length, name);
-            assert.strictEqual("number", res[0], name);
-            assert.strictEqual(1, res[1], name);
+        client.set("incr key", 0, function (err, reply) {
+            if (err) throw err;
+            client.eval("local foo = redis.call('incr','incr key')\n" + "return {type(foo),foo}", 0, function (err, res) {
+                if (err) throw err;
+                assert.strictEqual(2, res.length, name);
+                assert.strictEqual("number", res[0], name);
+                assert.strictEqual(1, res[1], name);
+            });
         });
-        // test {EVAL - Redis bulk -> Lua type conversion}
-        client.eval("local foo = redis.call('get','mykey'); return {type(foo),foo}", 0, function (err, res) {
-            assert.strictEqual(2, res.length, name);
-            assert.strictEqual("string", res[0], name);
-            assert.strictEqual("myval", res[1], name);
+
+        client.set("bulk reply key", "bulk reply value", function (err, res) {
+            // test {EVAL - Redis bulk -> Lua type conversion}
+            client.eval("local foo = redis.call('get','bulk reply key'); return {type(foo),foo}", 0, function (err, res) {
+                if (err) throw err;
+                assert.strictEqual(2, res.length, name);
+                assert.strictEqual("string", res[0], name);
+                assert.strictEqual("bulk reply value", res[1], name);
+            });
         });
+
         // test {EVAL - Redis multi bulk -> Lua type conversion}
-        client.del("mylist");
-        client.rpush("mylist", "a");
-        client.rpush("mylist", "b");
-        client.rpush("mylist", "c");
-        client.eval("local foo = redis.call('lrange','mylist',0,-1)\n" + "return {type(foo),foo[1],foo[2],foo[3],# foo}", 0, function (err, res) {
-            assert.strictEqual(5, res.length, name);
-            assert.strictEqual("table", res[0], name);
-            assert.strictEqual("a", res[1], name);
-            assert.strictEqual("b", res[2], name);
-            assert.strictEqual("c", res[3], name);
-            assert.strictEqual(3, res[4], name);
-        });
+        client.multi()
+            .del("mylist")
+            .rpush("mylist", "a")
+            .rpush("mylist", "b")
+            .rpush("mylist", "c")
+            .exec(function (err, replies) {
+                if (err) throw err;
+                client.eval("local foo = redis.call('lrange','mylist',0,-1); return {type(foo),foo[1],foo[2],foo[3],# foo}", 0, function (err, res) {
+                    assert.strictEqual(5, res.length, name);
+                    assert.strictEqual("table", res[0], name);
+                    assert.strictEqual("a", res[1], name);
+                    assert.strictEqual("b", res[2], name);
+                    assert.strictEqual("c", res[3], name);
+                    assert.strictEqual(3, res[4], name);
+                });
+            });
         // test {EVAL - Redis status reply -> Lua type conversion}
         client.eval("local foo = redis.call('set','mykey','myval'); return {type(foo),foo['ok']}", 0, function (err, res) {
+            if (err) throw err;
             assert.strictEqual(2, res.length, name);
             assert.strictEqual("table", res[0], name);
             assert.strictEqual("OK", res[1], name);
         });
         // test {EVAL - Redis error reply -> Lua type conversion}
-        client.set("mykey", "myval");
-        client.eval("local foo = redis.call('incr','mykey'); return {type(foo),foo['err']}", 0, function (err, res) {
-            assert.strictEqual(2, res.length, name);
-            assert.strictEqual("table", res[0], name);
-            assert.strictEqual("ERR value is not an integer or out of range", res[1], name);
+        client.set("error reply key", "error reply value", function (err, res) {
+            if (err) throw err;
+            client.eval("local foo = redis.pcall('incr','error reply key'); return {type(foo),foo['err']}", 0, function (err, res) {
+                if (err) throw err;
+                assert.strictEqual(2, res.length, name);
+                assert.strictEqual("table", res[0], name);
+                assert.strictEqual("ERR value is not an integer or out of range", res[1], name);
+            });
         });
         // test {EVAL - Redis nil bulk reply -> Lua type conversion}
-        client.del("mykey");
-        client.eval("local foo = redis.call('get','mykey'); return {type(foo),foo == false}", 0, function (err, res) {
-            assert.strictEqual(2, res.length, name);
-            assert.strictEqual("boolean", res[0], name);
-            assert.strictEqual(1, res[1], name);
+        client.del("nil reply key", function (err, res) {
+            if (err) throw err;
+            client.eval("local foo = redis.call('get','nil reply key'); return {type(foo),foo == false}", 0, function (err, res) {
+                if (err) throw err;
+                assert.strictEqual(2, res.length, name);
+                assert.strictEqual("boolean", res[0], name);
+                assert.strictEqual(1, res[1], name);
+                next(name);
+            });
         });
-        // test {EVAL - Script can't run more than configured time limit} {
-        client.config("set", "lua-time-limit", 1);
-        client.eval("local i = 0; while true do i=i+1 end", 0, last("name", require_error(name)));
     } else {
         console.log("Skipping " + name + " because server version isn't new enough.");
         next(name);
@@ -512,7 +558,6 @@ tests.HLEN = function () {
 
     client.HSET(key, field1, value1, function (err, results) {
         client.HLEN(key, function (err, len) {
-            console.log(results+"sgdshhsshs")
             assert.ok(2 === +len);
             next(name);
         });
@@ -744,6 +789,32 @@ tests.KEYS = function () {
     });
 };
 
+tests.MULTIBULK = function() {
+    var name = "MULTIBULK",
+        keys_values = [];
+
+    for (var i = 0; i < 200; i++) {
+        var key_value = [
+            "multibulk:" + crypto.randomBytes(256).toString("hex"), // use long strings as keys to ensure generation of large packet
+            "test val " + i
+        ];
+        keys_values.push(key_value);
+    }
+
+    client.mset(keys_values.reduce(function(a, b) {
+        return a.concat(b);
+    }), require_string("OK", name));
+
+    client.KEYS("multibulk:*", function(err, results) {
+        assert.strictEqual(null, err, "result sent back unexpected error: " + err);
+        assert.deepEqual(keys_values.map(function(val) {
+            return val[0];
+        }).sort(), results.sort(), name);
+    });
+
+    next(name);
+};
+
 tests.MULTIBULK_ZERO_LENGTH = function () {
     var name = "MULTIBULK_ZERO_LENGTH";
     client.KEYS(['users:*'], function (err, results) {
@@ -790,10 +861,17 @@ tests.DBSIZE = function () {
     client.DBSIZE([], last(name, require_number_pos("DBSIZE")));
 };
 
-tests.GET = function () {
-    var name = "GET";
+tests.GET_1 = function () {
+    var name = "GET_1";
     client.set(["get key", "get val"], require_string("OK", name));
     client.GET(["get key"], last(name, require_string("get val", name)));
+};
+
+tests.GET_2 = function() {
+    var name = "GET_2";
+
+    // tests handling of non-existent keys
+    client.GET('this_key_shouldnt_exist', last(name, require_null(name)));
 };
 
 tests.SET = function () {
@@ -905,7 +983,7 @@ tests.SADD = function () {
     var name = "SADD";
 
     client.del('set0');
-    client.sadd('set0', 'member0', require_number(1, name));
+    client.SADD('set0', 'member0', require_number(1, name));
     client.sadd('set0', 'member0', last(name, require_number(0, name)));
 };
 
@@ -916,9 +994,16 @@ tests.SADD2 = function () {
     client.sadd("set0", ["member0", "member1", "member2"], require_number(3, name));
     client.smembers("set0", function (err, res) {
         assert.strictEqual(res.length, 3);
-        assert.strictEqual(res[0], "member0");
-        assert.strictEqual(res[1], "member1");
-        assert.strictEqual(res[2], "member2");
+        assert.ok(~res.indexOf("member0"));
+        assert.ok(~res.indexOf("member1"));
+        assert.ok(~res.indexOf("member2"));
+    });
+    client.SADD("set1", ["member0", "member1", "member2"], require_number(3, name));
+    client.smembers("set1", function (err, res) {
+        assert.strictEqual(res.length, 3);
+        assert.ok(~res.indexOf("member0"));
+        assert.ok(~res.indexOf("member1"));
+        assert.ok(~res.indexOf("member2"));
         next(name);
     });
 };
@@ -1352,20 +1437,21 @@ tests.MONITOR = function () {
         }));
     });
     monitor_client.on("monitor", function (time, args) {
+        // skip monitor command for Redis <= 2.4.16
+        if (args[0] === "monitor") return;
+
         responses.push(args);
-        if (responses.length === 3) {
-            assert.strictEqual(1, responses[0].length);
-            assert.strictEqual("monitor", responses[0][0]);
-            assert.strictEqual(5, responses[1].length);
-            assert.strictEqual("mget", responses[1][0]);
-            assert.strictEqual("some", responses[1][1]);
-            assert.strictEqual("keys", responses[1][2]);
-            assert.strictEqual("foo", responses[1][3]);
-            assert.strictEqual("bar", responses[1][4]);
-            assert.strictEqual(3, responses[2].length);
-            assert.strictEqual("set", responses[2][0]);
-            assert.strictEqual("json", responses[2][1]);
-            assert.strictEqual('{"foo":"123","bar":"sdflkdfsjk","another":false}', responses[2][2]);
+        if (responses.length === 2) {
+            assert.strictEqual(5, responses[0].length);
+            assert.strictEqual("mget", responses[0][0]);
+            assert.strictEqual("some", responses[0][1]);
+            assert.strictEqual("keys", responses[0][2]);
+            assert.strictEqual("foo", responses[0][3]);
+            assert.strictEqual("bar", responses[0][4]);
+            assert.strictEqual(3, responses[1].length);
+            assert.strictEqual("set", responses[1][0]);
+            assert.strictEqual("json", responses[1][1]);
+            assert.strictEqual('{"foo":"123","bar":"sdflkdfsjk","another":false}', responses[1][2]);
             monitor_client.quit(function (err, res) {
                 next(name);
             });
@@ -1500,6 +1586,22 @@ tests.ENABLE_OFFLINE_QUEUE_FALSE = function () {
     });
 };
 
+tests.SLOWLOG = function () {
+    var name = "SLOWLOG";
+    client.config('set', 'slowlog-log-slower-than', 0, require_string("OK", name));
+    client.slowlog('reset', require_string("OK", name));
+    client.set('foo', 'bar', require_string("OK", name));
+    client.get('foo', require_string("bar", name));
+    client.slowlog('get', function (err, res) {
+        assert.equal(res.length, 3, name);
+        assert.equal(res[0][3].length, 2, name);
+        assert.deepEqual(res[1][3], ['set', 'foo', 'bar'], name);
+        assert.deepEqual(res[2][3], ['slowlog', 'reset'], name);
+        client.config('set', 'slowlog-log-slower-than', 10000, require_string("OK", name));
+        next(name);
+    });
+}
+
 // TODO - need a better way to test auth, maybe auto-config a local Redis server or something.
 // Yes, this is the real password.  Please be nice, thanks.
 tests.auth = function () {
@@ -1539,6 +1641,7 @@ run_next_test = function run_next_test() {
         console.log('\n  completed \x1b[32m%d\x1b[0m tests in \x1b[33m%d\x1b[0m ms\n', test_count, new Date() - all_start);
         client.quit();
         client2.quit();
+        bclient.quit();
     }
 };
 
@@ -1568,6 +1671,11 @@ client3.on("error", function (err) {
     console.error("client3: " + err.stack);
     process.exit();
 });
+bclient.on("error", function (err) {
+    console.error("bclient: " + err.stack);
+    process.exit();
+});
+
 client.on("reconnecting", function (params) {
     console.log("reconnecting: " + util.inspect(params));
 });

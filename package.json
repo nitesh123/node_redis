@@ -1,10 +1,8 @@
 {   "name" : "redis",
-    "version" : "0.7.2",
+    "version" : "0.8.2",
     "description" : "Redis client library",
+    "keywords" : [ "redis", "database" ],
     "author": "Matt Ranney <mjr@ranney.com>",
-    "maintainers": [ 
-        "David Trejo <david.daniel.trejo@gmail.com> (http://dtrejo.com/)"
-    ],
     "main": "./index.js",
     "scripts": {
         "test": "node ./test.js"
