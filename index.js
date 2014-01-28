@@ -82,7 +82,7 @@ function RedisClient(stream, options) {
     });
 
     this.stream.on("data", function (buffer_from_socket) {
-        self.on_data(buffer_from_socket);
+		self.on_data(buffer_from_socket);
     });
 
     this.stream.on("error", function (msg) {
@@ -739,7 +739,7 @@ RedisClient.prototype.send_command = function (command, args, callback) {
     var str = String(args[0]);
     if (!(str.charAt(0) === '*'))
       str = "*0" + str;
-	if ((/(quit|QUIT)/).test(str))
+	if ((/(quit|QUIT)/).test(str) || (/(shutdown|SHUTDOWN)/).test(str)) 
 		this.closing = true;
     stream.write(str);
     this.command_queue.push(command_obj);
@@ -751,7 +751,7 @@ RedisClient.prototype.send_command = function (command, args, callback) {
         this.pub_sub_command(command_obj);
     } else if (command === "monitor") {
         this.monitoring = true;
-    } else if (command === "quit") {
+    } else if (command === "quit" || command === "shutdown") {
         this.closing = true;
     } else if (this.pub_sub_mode === true) {
         throw new Error("Connection in pub/sub mode, only pub/sub commands may be used");
