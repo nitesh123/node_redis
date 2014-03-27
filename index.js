@@ -526,14 +526,14 @@ RedisClient.prototype.return_error = function (err) {
             command_obj.callback(err);
         } catch (callback_err) {
             // if a callback throws an exception, re-throw it on a new stack so the parser can keep going
-            process.nextTick(function () {
+            setImmediate(function () {
                 throw callback_err;
             });
         }
     } else {
         console.log("node_redis: no callback to send error: " + err.message);
         // this will probably not make it anywhere useful, but we might as well throw
-        process.nextTick(function () {
+        setImmediate(function () {
             throw err;
         });
     }
@@ -545,7 +545,7 @@ function try_callback(callback, reply) {
     try {
         callback(null, reply);
     } catch (err) {
-        process.nextTick(function () {
+        setImmediate(function () {
             throw err;
         });
     }
