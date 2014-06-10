@@ -1042,7 +1042,8 @@ commands = set_union(["get", "set", "setnx", "setex", "append", "strlen", "del",
       "randomkey", "select", "move", "rename", "renamenx", "expire", "expireat", "keys", "dbsize", "auth", "ping", "echo", "save", "bgsave",
       "bgrewriteaof", "shutdown", "lastsave", "type", "multi", "exec", "discard", "sync", "flushdb", "flushall", "sort", "info", "monitor", "ttl",
       "persist", "slaveof", "debug", "config", "subscribe", "unsubscribe", "psubscribe", "punsubscribe", "publish", "watch", "unwatch", "cluster",
-      "restore", "migrate", "dump", "object", "client", "eval", "evalsha", "scan", "sscan", "hscan", "zscan"], require("./lib/commands"));
+      "restore", "migrate", "dump", "object", "client", "eval", "evalsha", "scan", "sscan", "hscan", "zscan", "pfselftest",	"pfadd", "pfcount", 
+	  "pfdebug", "pfmerge"], require("./lib/commands"));
 
 // for maipulating the stream
 stream_commands = ["read", "write", "flush", "close"];
